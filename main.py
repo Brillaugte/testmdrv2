@@ -1,84 +1,82 @@
-from flask import Flask
-from thirdweb import ThirdwebSDK
-from thirdweb.types import SDKOptions
+from flask import Flask, request, jsonify
+from flask_socketio import SocketIO, emit
 import os
-from flask_sqlalchemy import SQLAlchemy
-
-
-app = Flask(__name__)
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///mydatabase.db'
-app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-db = SQLAlchemy(app)
-
-private_key = os.environ['PRIVATE_KEY']
-secret_key = os.environ['SECRET_KEY']
-address = "0xd0dDF915693f13Cf9B3b69dFF44eE77C901882f8"#owner address
-
-sdk = ThirdwebSDK.from_private_key(private_key, "mumbai", SDKOptions(secret_key=secret_key))
-
+import time
 
 app = Flask(__name__)
-init_db(app)
-for id in ccxt.exchanges:
-    exchange = getattr(ccxt, id)
-    exchanges[id] = exchange()
+socketio = SocketIO(app, cors_allowed_origins="*")
+
+rfqs = {}
+quotes = {}
+active_rfqs = set()
 
 
-
-@app.route('/')
-def index():
-    return ' https://www.youtube.com/watch?v=WEMCYBPUR00 '
-
-
-# case where user need parameters to open a trade
-
-# case where hedger acccept automatically a quote
-data = contract.call("acceptQuote", _id)
-
-
-
-
-# triger liquidation on a position ( later )
-# settle a transaction ( later )
+@app.route('/send_rfq', methods=['POST'])
+def send_rfq():
+  rfq_data = request.json
+  rfq_id = f"{time.time()}_{rfq_data['address']}"
+  rfqs[rfq_id] = rfq_data
+  quotes[rfq_id] = []
+  active_rfqs.add(rfq_id)
+  socketio.emit('new_rfq', {
+    'rfq_id': rfq_id,
+    'rfq_data': rfq_data
+  },
+                broadcast=True)
+  return jsonify({"rfq_id": rfq_id})
 
 
-
-def update_db_hedges (c_db_id):
-  # fetch from exchange position # for frontend
-
-def update_db_hedger_account():
-
-
-def db_hedger_parameters():
-
-    
-def get_open_positions(oracle)
-  //scan 
-  return list
-
-def get_open_positions("address"):
-  // scan into the db each open positions open for an address
+@app.route('/delete_rfq/<rfq_id>', methods=['DELETE'])
+def delete_rfq(rfq_id):
+  if rfq_id in rfqs:
+    del rfqs[rfq_id]
+    del quotes[rfq_id]
+    active_rfqs.remove(rfq_id)
+    socketio.emit('remove_rfq', {'rfq_id': rfq_id}, broadcast=True)
+    return jsonify({"status": "deleted"})
+  else:
+    return jsonify({"status": "not_found"}), 404
 
 
+@socketio.on('send_quote')
+def handle_send_quote(json):
+  rfq_id = json.get('rfq_id')
+  quote_data = json.get('quote_data')
+  if rfq_id in rfqs:
+    quotes[rfq_id].append(quote_data)
+    socketio.emit('new_quote', {
+      'rfq_id': rfq_id,
+      'quote_data': quote_data
+    },
+                  broadcast=True)
 
 
-app.run(host='0.0.0.0', port=81)
+@app.route('/get_best_quote/<rfq_id>', methods=['GET'])
+def get_best_quote(rfq_id):
+  if rfq_id in quotes:
+    if len(quotes[rfq_id]) == 0:
+      return jsonify({"status": "no_quotes"})
+    best_quote = max(quotes[rfq_id], key=lambda x: x['qty_at_price'])
+    return jsonify({"best_quote": best_quote})
+  else:
+    return jsonify({"status": "rfq_not_found"}), 404
 
-
-@app.route('/api/open-trade', methods=['GET'])
-def get_open_trade():
-    symbol = request.args.get('symbol')
-    # Retrieve the open trade data based on the symbol from your database
-    open_trade_data = retrieve_open_trade_data(symbol)
-    return jsonify(open_trade_data)
-
-def retrieve_open_trade_data(symbol):
-    # This function should query your database to get the open trade data
-    # for the given symbol
-    return {
-        'symbol': symbol,
-        'data': 'Example data for symbol ' + symbol
-    }
 
 if __name__ == '__main__':
-    app.run()
+  port = int(os.environ.get("PORT", 8080))
+  socketio.run(app, host='0.0.0.0', port=port)
+  
+'''
+Goal is to make a RFQ system where there is multieple frontends and multiple liquidity provider, frontend user sends a rfq, and liquidity provider answer the rfq to the api, and frontend fetch the best one from the api.
+
+# Do a JSON where peoples send their parameters and each hedging bot listen all orders and answer back their parameters, the query is based on the parameter. Parameter are spread instead of price.
+# Have another replit that answer very basically to requests.
+# Have the frontend where we can input parameters and dynamic pricing.
+{address:"0x00", spread=1, isLong=True, bOracleId=3, price=123, qty=12, interesRate=-0.15} # use that as a key
+
+answer 
+{qty_at_price, full_qty_spread, interestRates = 120}
+
+
+# methodm when first connect, if use dont have gaz token, send him some and some fake USD#spread ( 1 - price when posted / price aksed )
+'''
